@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bharat-call-bench"
+version = "0.1.0"
+description = "Benchmark for speech recognition on code-mixed Indian phone calls, scored on critical errors."
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "soundfile>=0.12",
+  "jiwer>=3.0",
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "httpx>=0.27",
+  "python-dotenv>=1.0",
+  "rapidfuzz>=3.6",
+  "indic-transliteration>=2.3",
+  "tqdm>=4.66",
+  "websockets>=12",
+]
+
+[project.optional-dependencies]
+scripts = ["litellm>=1.0"]              # LLM-written call scripts; `make seed` needs no key
+tts = ["edge-tts>=6.1"]
+backend = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "python-multipart>=0.0.9"]  # FastAPI voice-agent service
+local = ["faster-whisper>=1.0"]  # open-weights ASR, runs offline with no API key
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+include = ["bcb*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "backend/tests"]
+
+# Pinned so `make lint` means the same thing on every machine and across ruff
+# releases. Deliberately focused: correctness and import hygiene, not style
+# churn. E501 is off because the explanatory comments in the lexicons and the
+# API docstrings are worth more than a column limit.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Generated from notebooks/build_notebook.py, which IS linted. Notebook cells
+# legitimately break module-import conventions -- grouped imports, imports
+# after a guard -- and linting the artefact rather than its generator only
+# produces noise.
+extend-exclude = ["notebooks/*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "C4", "RUF"]
+ignore = [
+  "E501",    # long lines: see above
+  "B008",    # function call in default arg â€” argparse/pydantic idiom here
+  "RUF001",  # ambiguous unicode: the lexicons are full of Indic script, on purpose
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bcb"]

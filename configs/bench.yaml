@@ -1,0 +1,151 @@
+# Bharat Call Bench — main configuration
+#
+# Endpoints, model names, output formats and language codes were verified
+# against https://docs.gnani.ai on 5 November 2026. See bcb/asr/providers.py
+# and bcb/tts/timbre.py for what was checked.
+
+languages:
+  - {code: hi-IN, name: Hinglish}
+  - {code: kn-IN, name: Kanglish}
+  - {code: ta-IN, name: Tanglish}
+
+domains: [loan, insurance, delivery, kyc, recharge]
+calls_per_language: 40
+customer_turns_per_call: 4
+split: {train: 0.7, val: 0.1, test: 0.2, seed: 42}
+
+paths:
+  scripts: data/scripts/curated.jsonl
+  clips: data/audio/clips.jsonl
+  audio: data/audio
+  noise: data/noise
+  transcripts: data/transcripts
+  cache: .cache/asr
+  results: results
+
+# Voice sources used to render customer turns. Two independent engines, so no
+# finding can be an artefact of one synthesiser. Human recordings are added as
+# voice source "human" by dropping wavs into data/audio/clean/human/.
+#
+# Timbre v3.0 shares 13 voices across all languages; a voice is chosen per call
+# from a hash of the call_id, so coverage is spread but reruns are identical.
+tts:
+  - {name: timbre_v3, provider: gnani_timbre, model: timbre-v3.0}
+  - {name: edge, provider: edge_tts}
+
+# Telephony conditions (steps applied in the order below)
+conditions:
+  clean: {}
+  phone:
+    sample_rate: 8000
+    codec: mulaw            # mulaw | gsm (needs sox with gsm) | none
+  phone_noise:
+    sample_rate: 8000
+    codec: mulaw
+    noise_snr_db: 10
+  phone_harsh:
+    sample_rate: 8000
+    codec: mulaw
+    noise_snr_db: 5
+    packet_loss: 0.05       # fraction of 20 ms frames dropped
+    loss_burst: 3           # mean burst length in frames
+
+# --------------------------------------------------------------------------- #
+# ASR providers under test
+# --------------------------------------------------------------------------- #
+# Gnani Prisma: POST https://api.vachana.ai/stt/v3, header X-API-Key-ID.
+#   model   prisma-v3.0, or omitted for prisma-v2.5 (the API default)
+#   format  verbatim   raw spoken form (the API default)
+#           transcribe inverse text normalisation: "tees lakh" -> digits
+#           codemix    keeps English in Latin script        (v3.0 only)
+#           transliterate  romanises the whole transcript   (v3.0 only)
+# Maximum clip length is 30 s, which every single-turn clip is well inside.
+asr:
+  # --- Prisma v3.0, one entry per output format ---------------------------- #
+  prisma_v3_transcribe:
+    client: gnani_prisma
+    label: Prisma v3.0 (transcribe/ITN)
+    model: prisma-v3.0
+    format: transcribe
+    stream: gnani_prisma
+  prisma_v3_codemix:
+    client: gnani_prisma
+    label: Prisma v3.0 (codemix)
+    model: prisma-v3.0
+    format: codemix
+    stream: gnani_prisma
+  prisma_v3_verbatim:
+    client: gnani_prisma
+    label: Prisma v3.0 (verbatim)
+    model: prisma-v3.0
+    format: verbatim
+  prisma_v3_translit:
+    client: gnani_prisma
+    label: Prisma v3.0 (transliterate)
+    model: prisma-v3.0
+    format: transliterate
+
+  # Does telling Prisma the language help, or does auto-detection hold up on a
+  # code-mixed line? `indic-auto` overrides the per-clip language code.
+  prisma_v3_auto:
+    client: gnani_prisma
+    label: Prisma v3.0 (indic-auto)
+    model: prisma-v3.0
+    format: transcribe
+    language_code: indic-auto
+
+  # Keyterm biasing, a Prisma v3.0 lever aimed straight at critical errors:
+  # the money words and units that CrER scores. Up to 200 terms.
+  prisma_v3_keyterms:
+    client: gnani_prisma
+    label: Prisma v3.0 (transcribe + keyterms)
+    model: prisma-v3.0
+    format: transcribe
+    keyterms: >-
+      lakh,crore,hazaar,rupaye,EMI,account number,
+      teen,tees,chaalis,pachaas,saadhe,dedh,dhai,
+      ondu,eradu,mooru,ippattu,muvattu,laksha,koti,
+      rendu,moonu,irupathu,muppathu,latcham,kodi
+
+  # --- Prisma v2.5, the previous generation ------------------------------- #
+  prisma_v25:
+    client: gnani_prisma
+    label: Prisma v2.5 (verbatim)
+    model: prisma-v2.5
+    stream: gnani_prisma
+  prisma_v25_itn:
+    client: gnani_prisma
+    label: Prisma v2.5 (transcribe/ITN)
+    model: prisma-v2.5
+    format: transcribe
+
+  # --- Comparison providers ----------------------------------------------- #
+  sarvam_saaras:
+    client: sarvam
+    label: Sarvam Saaras
+  whisper_large_v3:
+    client: groq_whisper
+    label: Whisper large-v3
+    model: whisper-large-v3
+
+  # Runs locally through faster-whisper: no API key, no network. This is the
+  # provider that makes the extractor study reproducible by anyone, and the
+  # fallback when a hosted key is unavailable. Its `latency_ms` is local
+  # compute time and is NOT comparable to a hosted provider's -- the latency
+  # table comes from bcb.eval.latency, which only measures streaming APIs.
+  local_whisper_small:
+    client: local_whisper
+    label: Whisper small (local, open weights)
+    model: small
+    device: cpu
+    compute_type: int8
+
+# Critical Error Rate weights (see docs/METRICS.md)
+crer_weights: {amount: 3, digits: 3, consent: 2, date: 2, name: 1}
+# Name matching is the weakest span type. Measured on 17 hand-built cases:
+# correct names score >= 0.800, incorrect ones <= 0.786 -- a margin of 0.014,
+# because ITRANS romanisation of Indic names overlaps with genuinely similar
+# wrong names. 0.79 sits in that gap, but verdicts near it are not reliable, so
+# `name` carries the lowest CrER weight and its misses are hand-audited.
+# See docs/METRICS.md and bcb.eval.metrics.name_similarity.
+name_similarity_threshold: 0.79
